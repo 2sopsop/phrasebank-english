@@ -270,12 +270,18 @@ select.field{width:auto}
 .ex-range span{padding-bottom:10px;color:var(--muted)}
 .ex-count{font-size:.9rem;color:var(--muted);margin:10px 0 14px}
 .ex-count b{color:var(--ink)}
+.dup-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--warn-bg);color:var(--ink);border-radius:10px;padding:10px 14px;margin:14px 0 0;font-size:.9rem}
+.dup-bar .btn{min-height:34px;padding:5px 12px;font-size:.85rem}
 .login{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
 .login-card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:32px 28px;max-width:380px;width:100%;text-align:center;display:grid;gap:12px}
 .login-logo{font-family:var(--serif);font-size:1.8rem;font-weight:600;margin:0}
 .login-sub{color:var(--muted);font-size:.92rem;margin:0 0 6px}
 .login-err{color:var(--bad);font-size:.85rem;margin:0;min-height:1em}
-.logout{font-size:.78rem;margin-left:8px;color:var(--muted)}
+.logout-btn{align-self:center;margin-left:10px;font:inherit;font-size:.78rem;font-weight:600;line-height:1;padding:7px 13px;border-radius:999px;border:1px solid #BAE0FD;background:#E3F2FD;color:#1E6FB8;cursor:pointer;transition:background .15s,border-color .15s}
+.logout-btn:hover{background:#CFE8FC;border-color:#94CCF7}
+.logout-btn:focus-visible{outline:2px solid #1E6FB8;outline-offset:2px}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .logout-btn{background:#16324A;border-color:#24507A;color:#9CCFFF}}
+:root[data-theme="dark"] .logout-btn{background:#16324A;border-color:#24507A;color:#9CCFFF}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit}
 .wr-head{padding-top:28px;margin-bottom:16px}
 .wr-pane .hint{margin:0 0 14px}
@@ -558,6 +564,7 @@ textarea.field{min-height:180px;resize:vertical;font-size:.95rem;line-height:1.5
         <button class="btn xl" id="export" hidden>엑셀로 내보내기</button>
       </div>
       <div class="legend" id="legend"></div>
+      <div class="dup-bar" id="dup-bar" hidden></div>
       <p id="list-count"></p>
       <div class="filters" id="filters" hidden></div>
       <div class="thead"><span class="th-x">표현</span><span class="th-x">뜻</span><span class="th-x">예시/예문</span><button type="button" class="th-btn" id="th-type" aria-haspopup="menu">유형 ▾</button><button type="button" class="th-btn" id="th-month" aria-haspopup="menu">시점 ▾</button><span class="th-x"></span></div>
@@ -801,7 +808,7 @@ onAuthStateChanged(auth, user => {
   curUid = user.uid; loginEl.hidden = true;
   if (!document.getElementById("logout")) {
     const b = document.createElement("button");
-    b.id = "logout"; b.type = "button"; b.className = "linkbtn logout"; b.textContent = "로그아웃";
+    b.id = "logout"; b.type = "button"; b.className = "logout-btn"; b.textContent = "로그아웃";
     b.title = user.email || "";
     b.onclick = () => signOut(auth);
     const sync = document.getElementById("sync"); sync.after(b);
@@ -1590,7 +1597,38 @@ function renderFilters(){
     f.hidden=false;
   } else f.hidden=true;
 }
+function dupGroups(){
+  const m=new Map();
+  for(const w of words.values()){ const k=norm(primary(w.en)); if(!k) continue; if(!m.has(k)) m.set(k,[]); m.get(k).push(w); }
+  return [...m.values()].filter(g=>g.length>1);
+}
+let dedupBusy=false;
+async function dedupe(){
+  if(dedupBusy) return; dedupBusy=true;
+  const groups=dupGroups(); let n=0;
+  for(const g of groups){
+    // 학습 기록이 가장 많은 것을 남기고, 나머지에서 예문·예문 힌트를 보완한 뒤 삭제
+    g.sort((a,b)=>((b.seen||0)-(a.seen||0))||((a.created||0)-(b.created||0)));
+    const keep=g[0];
+    for(const x of g.slice(1)){
+      if(!keep.note&&x.note) keep.note=x.note;
+      if(!(Array.isArray(keep.aiEx)&&keep.aiEx.length)&&Array.isArray(x.aiEx)) keep.aiEx=x.aiEx;
+      if(!keep.tag&&x.tag) keep.tag=x.tag;
+    }
+    try{ await saveWord(keep,{silent:true}); }catch{}
+    for(const x of g.slice(1)){ try{ await removeWord(x.id); n++; }catch{} }
+  }
+  dedupBusy=false; renderList(); toast("중복 단어 "+n+"개를 정리했어요");
+}
+function renderDupBar(){
+  const bar=$("dup-bar"), g=dupGroups(), extra=g.reduce((a,x)=>a+x.length-1,0);
+  if(!extra||dedupBusy){ bar.hidden=true; return; }
+  bar.replaceChildren(h("span",{text:"같은 표현이 두 번 이상 들어간 단어가 "+extra+"개 있어요."}),
+    h("button",{class:"btn primary",type:"button",onclick:()=>{ bar.hidden=true; dedupe(); }},"중복 정리하기"));
+  bar.hidden=false;
+}
 function renderList(){
+  renderDupBar();
   const q=$("q").value.trim().toLowerCase(), f=$("filter").value;
   const tl=typesList(), ms=new Set(monthsList().map(x=>x[0]));
   for(const t of [...listTag]) if(t!=="__none" && !tl.includes(t)) listTag.delete(t);
@@ -1943,8 +1981,14 @@ function backupData(){
   return {app:"phrase-bank",version:1,exported:Date.now(),types:typesList(),testExclude:getExclude(),
     words:[...words.values()].map(strip), writings:[...writings.values()].map(strip)};
 }
+let backupBusy=false;
 async function importBackup(obj){
   if(!obj||obj.app!=="phrase-bank"||!Array.isArray(obj.words)){ toast("Phrase Bank 백업 파일이 아니에요."); return; }
+  if(backupBusy){ toast("백업을 불러오는 중이에요. 잠시만 기다려 주세요."); return; }
+  backupBusy=true; toast("백업을 불러오는 중이에요…");
+  try{ await importBackupRun(obj); } finally{ backupBusy=false; }
+}
+async function importBackupRun(obj){
   const have=new Set([...words.values()].map(w=>norm(primary(w.en))));
   let n=0, m=0;
   for(const w of obj.words){ if(!w||!w.en||!w.ko) continue; const k=norm(primary(w.en)); if(have.has(k)) continue; have.add(k);
