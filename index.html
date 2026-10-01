@@ -722,8 +722,8 @@ const firebaseConfig = {
 };
 // App Check(reCAPTCHA Enterprise) 사이트 키. 만든 뒤 붙여넣으세요. 비워두면 App Check 없이 동작해요.
 const RECAPTCHA_SITE_KEY = "6LfPP9ktAAAAAPtECO4H6jtvhbGhoHInmqpTHy5f";
-// 사용할 Gemini 모델. 모델이 종료되면 Firebase AI Logic 문서에서 최신 이름으로 바꿔주세요.
-const GEMINI_MODEL = "gemini-3.8-flash";
+// 사용할 Gemini 모델 (앞에서부터 시도해요). 안 되는 모델은 자동으로 건너뛰고, 되는 모델을 기억해요.
+const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3-flash"];
 /* ================================ */
 
 const V="12.19.0", B="https://www.gstatic.com/firebasejs/"+V+"/";
@@ -757,33 +757,56 @@ const wrapCol = ref => ({
 const dbApi = { doc: path => wrapDoc(doc(fs, path)) };
 
 /* Gemini (Firebase AI Logic) */
-let aiP = null;
-function getModel(){
-  if (!aiP) aiP = (async () => {
-    const { getAI, getGenerativeModel, GoogleAIBackend } = await import(B+"firebase-ai.js");
-    const ai = getAI(app, { backend: new GoogleAIBackend() });
-    return {
-      json: getGenerativeModel(ai, { model: GEMINI_MODEL, generationConfig: { responseMimeType: "application/json" } }),
-      text: getGenerativeModel(ai, { model: GEMINI_MODEL })
-    };
-  })();
-  return aiP;
+let aiMod = null, aiInst = null;
+async function getAI_(){
+  if (!aiInst) {
+    aiMod = await import(B+"firebase-ai.js");
+    aiInst = aiMod.getAI(app, { backend: new aiMod.GoogleAIBackend() });
+  }
+  return aiInst;
+}
+const MODEL_KEY = "pb:gemini-model";
+function modelOrder(){
+  let saved = null; try { saved = localStorage.getItem(MODEL_KEY); } catch {}
+  return saved && GEMINI_MODELS.includes(saved) ? [saved, ...GEMINI_MODELS.filter(m => m !== saved)] : GEMINI_MODELS.slice();
+}
+const errMsg = e => String((e && (e.message || e.code)) || e);
+const isModelProblem = m => /\b(404|500|503)\b|not found|not supported|is not available|no longer available|overloaded|high demand|unavailable|This model is/i.test(m);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function generate(prompt, asJson){
+  const ai = await getAI_();
+  let last = null;
+  for (const name of modelOrder()) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = aiMod.getGenerativeModel(ai, { model: name, ...(asJson ? { generationConfig: { responseMimeType: "application/json" } } : {}) });
+        const r = await model.generateContent(String(prompt));
+        try { localStorage.setItem(MODEL_KEY, name); } catch {}
+        return r.response.text();
+      } catch (e) {
+        last = e; const m = errMsg(e);
+        console.warn("[Gemini]", name, m);
+        if (/\b(500|503)\b|overloaded|high demand/i.test(m) && attempt === 0) { await sleep(1200); continue; }
+        break;
+      }
+    }
+    if (!isModelProblem(errMsg(last))) break; // 모델 문제가 아니면(권한, 사용량 등) 다른 모델로 넘어가지 않음
+  }
+  throw last;
 }
 function aiError(e){
-  const msg = String((e && (e.message || e.code)) || e);
+  const msg = errMsg(e);
   console.error("[Gemini]", msg);
   if (/\b429\b|RESOURCE_EXHAUSTED|quota exceeded|rate.?limit|too many requests/i.test(msg)) return { code: "rate_limited", message: msg };
   if (/app.?check|\b403\b|PERMISSION_DENIED|API_NOT_ENABLED|has not been used|is disabled/i.test(msg)) return { code: "not_granted", message: msg };
-  return { code: "unavailable", message: msg };
+  return { code: "unavailable", message: msg.replace(/^.*?generateContent:\s*/,"") };
 }
 const sample = async (prompt) => {
-  try { const m = await getModel(); const r = await m.text.generateContent(String(prompt)); return { text: r.response.text() }; }
-  catch(e){ throw aiError(e); }
+  try { return { text: await generate(prompt, false) }; } catch(e){ throw aiError(e); }
 };
 sample.json = async (prompt) => {
   let t;
-  try { const m = await getModel(); const r = await m.json.generateContent(String(prompt)); t = r.response.text(); }
-  catch(e){ throw aiError(e); }
+  try { t = await generate(prompt, true); } catch(e){ throw aiError(e); }
   t = String(t||"").replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
   try { return JSON.parse(t); } catch { throw { code: "invalid_json" }; }
 };
@@ -2192,7 +2215,7 @@ function aiErr(e){
   if(c==="rate_limited") return "요청이 많아서 잠시 뒤에 다시 해주세요.";
   return "AI 응답을 받지 못했어요. 잠시 뒤 다시 해주세요.";
 }
-const aiErrFull=e=> aiErr(e) + (e&&e.message? " ("+String(e.message).slice(0,160)+")" : "");
+const aiErrFull=e=> aiErr(e) + (e&&e.message? " ("+String(e.message).slice(0,300)+")" : "");
 /* 회의 문장 만들기 */
 let WQ=null;
 function wrChips(it){ return [h("span",{class:"wr-lbl",text:"이 표현을 넣어서"}),...it.words.map((t,i)=>h("span",{class:"wr-chip"},t,it.means&&it.means[i]? h("small",{text:it.means[i]}) : null))]; }
