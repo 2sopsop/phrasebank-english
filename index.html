@@ -772,8 +772,8 @@ function getModel(){
 function aiError(e){
   const msg = String((e && (e.message || e.code)) || e);
   console.error("[Gemini]", msg);
-  if (/429|quota|RESOURCE_EXHAUSTED|rate/i.test(msg)) return { code: "rate_limited", message: msg };
-  if (/app.?check|403|PERMISSION|API_NOT_ENABLED|not been used|disabled/i.test(msg)) return { code: "not_granted", message: msg };
+  if (/\b429\b|RESOURCE_EXHAUSTED|quota exceeded|rate.?limit|too many requests/i.test(msg)) return { code: "rate_limited", message: msg };
+  if (/app.?check|\b403\b|PERMISSION_DENIED|API_NOT_ENABLED|has not been used|is disabled/i.test(msg)) return { code: "not_granted", message: msg };
   return { code: "unavailable", message: msg };
 }
 const sample = async (prompt) => {
@@ -2192,6 +2192,7 @@ function aiErr(e){
   if(c==="rate_limited") return "요청이 많아서 잠시 뒤에 다시 해주세요.";
   return "AI 응답을 받지 못했어요. 잠시 뒤 다시 해주세요.";
 }
+const aiErrFull=e=> aiErr(e) + (e&&e.message? " ("+String(e.message).slice(0,160)+")" : "");
 /* 회의 문장 만들기 */
 let WQ=null;
 function wrChips(it){ return [h("span",{class:"wr-lbl",text:"이 표현을 넣어서"}),...it.words.map((t,i)=>h("span",{class:"wr-chip"},t,it.means&&it.means[i]? h("small",{text:it.means[i]}) : null))]; }
@@ -2256,7 +2257,7 @@ async function genWork(same){
     const f=$("wr-q-items").querySelector("textarea"); if(f) f.focus({preventScroll:true});
   }catch(e){
     WQ=prev; if(WQ) renderWQ(); else $("wr-q").hidden=true;
-    toast(e&&e.code==="invalid_json"?"문장을 만들지 못했어요. 다시 눌러주세요.":aiErr(e));
+    toast(e&&e.code==="invalid_json"?"문장을 만들지 못했어요. 다시 눌러주세요.":aiErrFull(e));
   }
   finally{ btns.forEach(b=>b.disabled=false); }
 }
@@ -2451,13 +2452,13 @@ async function continueChat(row){
         ta.disabled=true; formRow.remove();
         res2.replaceChildren(h("div",{class:"wr-res"},r.comment? h("p",{class:"wr-cmt",text:String(r.comment)}) : null,h("div",{class:"wr-sec"},itemView({...item,partner:null},0,false))),
           h("p",{class:"hint",style:"margin:12px 0 0",text:"이 대화도 같은 작문 노트에 이어서 저장했어요."}), nextRow());
-      }catch(e){ go.disabled=false; res2.replaceChildren(h("p",{class:"wr-busy",text:e&&e.code==="invalid_json"?"첨삭 결과를 읽지 못했어요. 다시 눌러주세요.":aiErr(e)})); }
+      }catch(e){ go.disabled=false; res2.replaceChildren(h("p",{class:"wr-busy",text:e&&e.code==="invalid_json"?"첨삭 결과를 읽지 못했어요. 다시 눌러주세요.":aiErrFull(e)})); }
     };
     go.onclick=submit;
     ta.addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); submit(); } });
   }catch(e){
     busy.remove(); row.querySelectorAll("button").forEach(b=>b.disabled=false);
-    toast(e&&e.code==="invalid_json"?"답변을 만들지 못했어요. 다시 눌러주세요.":aiErr(e));
+    toast(e&&e.code==="invalid_json"?"답변을 만들지 못했어요. 다시 눌러주세요.":aiErrFull(e));
   }
 }
 async function runCorrect(kind){
@@ -2489,7 +2490,7 @@ async function runCorrect(kind){
     saveWriting(entry); renderWriteSide();
     if(isWork){ CUR=entry; out.append(nextRow()); $("wr-work-form").hidden=true; $("wr-gen-row").hidden=true; $("wr-q-items").querySelectorAll("textarea").forEach(t=>t.disabled=true); }
     else { $("wr-free-in").value=""; $("wr-free-ctx").value=""; }
-  }catch(e){ out.replaceChildren(h("p",{class:"wr-busy",text:e&&e.code==="invalid_json"?"첨삭 결과를 읽지 못했어요. 다시 눌러주세요.":aiErr(e)})); }
+  }catch(e){ out.replaceChildren(h("p",{class:"wr-busy",text:e&&e.code==="invalid_json"?"첨삭 결과를 읽지 못했어요. 다시 눌러주세요.":aiErrFull(e)})); }
   finally{ btn.disabled=false; }
 }
 $("wr-work-go").addEventListener("click",()=>runCorrect("work"));
