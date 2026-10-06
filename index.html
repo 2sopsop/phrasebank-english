@@ -55,6 +55,14 @@ button,input,textarea,select{font:inherit;color:inherit}
 nav{display:flex;gap:4px}
 nav button{background:none;border:0;padding:10px 12px 12px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
 nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+nav button{white-space:nowrap}
+@media (max-width:760px){
+  .top{flex-direction:column;align-items:stretch;gap:0}
+  .brand{padding-bottom:6px}
+  nav{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;gap:0;margin:0 -4px}
+  nav::-webkit-scrollbar{display:none}
+  nav button{padding:10px 9px 11px;font-size:.92rem;flex:1 0 auto}
+}
 nav button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:4px}
 
 /* buttons */
@@ -472,6 +480,13 @@ textarea.field{min-height:180px;resize:vertical;font-size:.95rem;line-height:1.5
             <label><input type="radio" name="size" value="0"><span>전부</span></label>
           </div>
         </div>
+        <div class="size">
+          <span>답하는 방식</span>
+          <div class="seg" role="radiogroup" aria-label="답하는 방식">
+            <label><input type="radio" name="ansmode" value="type"><span>직접 쓰기</span></label>
+            <label><input type="radio" name="ansmode" value="choice"><span>📱 객관식 (모바일)</span></label>
+          </div>
+        </div>
         <div class="size" id="tag-row" hidden>
           <span>유형</span>
           <select class="field" id="test-tag" aria-label="유형"></select>
@@ -620,10 +635,8 @@ textarea.field{min-height:180px;resize:vertical;font-size:.95rem;line-height:1.5
               <label>영어<input class="field en-in" id="add-en" required autocapitalize="off" spellcheck="false"></label>
               <label>한글 뜻<input class="field" id="add-ko" required></label>
             </div>
-            <div class="two">
-              <label>예문 (선택)<input class="field" id="add-note"></label>
-              <label>유형 (선택)<select class="field" id="add-tag" style="width:100%"></select></label>
-            </div>
+            <label>예문 (선택) · 엔터로 줄을 바꿀 수 있어요<textarea class="field" id="add-note" rows="5" style="min-height:120px;resize:vertical"></textarea></label>
+            <label style="max-width:240px">유형<select class="field" id="add-tag" style="width:100%"></select></label>
             <div><button class="btn primary" type="submit">추가하기</button></div>
           </form>
         </section>
@@ -1185,7 +1198,9 @@ $("again").addEventListener("click",()=>{ $("test-done").hidden=true; const p=po
 $("to-home").addEventListener("click",()=>{ $("test-done").hidden=true; renderTestHome(); });
 
 /* ---------- session ---------- */
-const S={cz:null,clozes:new Map(),active:false,queue:[],total:0,finished:new Set(),missed:new Set(),missOrder:[],firstTry:new Map(),cur:null,phase:"idle",timer:null};
+const ANS_KEY="pb:answerMode";
+function loadAnsMode(){ let v=null; try{ v=localStorage.getItem(ANS_KEY); }catch{} if(v!=="type"&&v!=="choice") v=(window.matchMedia&&matchMedia("(pointer:coarse)").matches)? "choice" : "type"; return v; }
+const S={choiceOnly:false,mcStart:false,cz:null,clozes:new Map(),active:false,queue:[],total:0,finished:new Set(),missed:new Set(),missOrder:[],firstTry:new Map(),cur:null,phase:"idle",timer:null};
 
 /* 세트 구성: 틀린 단어 40% · 복습 30% · 새 단어 30%, 각 묶음 안에서는 가중치 랜덤 */
 const lastWrongTs=w=> Array.isArray(w.wrongLog)&&w.wrongLog.length? w.wrongLog[w.wrongLog.length-1] : (w.wrong? (w.updated||0) : 0);
@@ -1214,6 +1229,10 @@ function buildSet(p,n){
   }
   return chosen.flat();
 }
+document.querySelectorAll('input[name="ansmode"]').forEach(r=>{
+  r.checked = r.value===loadAnsMode();
+  r.addEventListener("change",()=>{ try{ localStorage.setItem(ANS_KEY,r.value); }catch{} });
+});
 function startSession(practice,ids){
   const p=pools(), n=sizeVal();
   let pick = ids ? ids.map(id=>words.get(id)).filter(Boolean)
@@ -1221,6 +1240,7 @@ function startSession(practice,ids){
     : buildSet(p,n);
   if(!pick.length) return;
   shuffle(pick);
+  S.choiceOnly = loadAnsMode()==="choice"; S.mcStart=false;
   Object.assign(S,{active:true,queue:pick.map(w=>w.id),total:pick.length,finished:new Set(),missed:new Set(),missOrder:[],firstTry:new Map(),cur:null,phase:"idle",clozes:new Map(),cz:null,dirs:new Map(),dir:"ke"});
   $("test-home").hidden=true; $("test-done").hidden=true; $("test-run").hidden=false;
   nextQ();
@@ -1262,6 +1282,11 @@ function nextQ(){
   cl.hidden=!S.cz; a.hidden=!!S.cz;
   $("type-actions").hidden=false;
   $("choices").hidden=true; $("feedback").hidden=true; $("judge").hidden=true;
+  if(S.choiceOnly && words.size>=4){
+    $("type-actions").hidden=true; a.hidden=true; cl.hidden=true;
+    S.mcStart=true; showChoices(w, S.dir==="ek"? "알맞은 뜻을 고르세요." : S.cz? "빈칸에 들어갈 말을 고르세요." : "알맞은 영어 표현을 고르세요.");
+    return;
+  }
   (S.cz? cl.querySelector(".blank") : a).focus();
 }
 function finish(){
@@ -1504,7 +1529,7 @@ function showChoices(w,cue){
   else opts=[{key:"ok",label:primary(w.en)},...distractors(w,3).map(o=>({key:o.id,label:primary(o.en)}))];
   if(opts.length<2){ showFeedback(false,w,"정답은 · 내일 다시 나와요"); return; }
   S.phase="choice";
-  $("cue").textContent=S.cz? cue.replace("정답을","빈칸에 들어갈 말을") : cue;
+  $("cue").textContent=(S.cz&&!S.mcStart)? cue.replace("정답을","빈칸에 들어갈 말을") : cue;
   shuffle(opts);
   const box=$("options"); box.replaceChildren();
   box.classList.toggle("ko-opts",S.dir==="ek");
@@ -1519,6 +1544,14 @@ function pickChoice(key){
     b.disabled=true;
     if(b.dataset.key==="ok") b.classList.add("is-right");
     else if(b.dataset.key===key) b.classList.add("is-wrong");
+  }
+  if(S.mcStart){
+    // 객관식 모드: 보기 선택이 곧 채점
+    S.mcStart=false;
+    w.seen=(w.seen||0)+1;
+    if(right){ markRight(w,id); afterRight(w,id); }
+    else { markWrong(w,id); showFeedback(false,w,"아쉬워요. 정답은 · 내일 다시 나와요"); }
+    return;
   }
   showFeedback(false,w, right ? "보기에서는 맞혔어요. 내일 다시 직접 써볼게요" : "아쉬워요. 정답은 · 내일 다시 나와요");
 }
